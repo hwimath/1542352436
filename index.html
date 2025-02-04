@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>실수의 대소 관계(상)</title>
+  <!-- MathJax 로드 (LaTeX 렌더링용) -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+    defer
+  ></script>
+  <style>
+    /* 흑백 테마 */
+    body {
+      background-color: #000;
+      color: #fff;
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    h1, h2, h3 {
+      text-align: center;
+    }
+    .hidden {
+      display: none;
+    }
+    .energy-bar {
+      width: 100%;
+      height: 20px;
+      background-color: #aaa;
+      margin-bottom: 10px;
+      position: relative;
+    }
+    .energy-fill {
+      height: 100%;
+      background-color: #fff;
+      width: 100%;
+      transition: width 1s linear;
+    }
+    .choices-container {
+      margin-top: 20px;
+    }
+    .choice-button {
+      background: none;
+      border: 1px solid #fff;
+      color: #fff;
+      padding: 6px 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      display: block;
+      width: 100%;
+      text-align: left;
+    }
+    .score-info, .chance-info {
+      margin: 8px 0;
+    }
+    #response {
+      white-space: pre-wrap;
+      background-color: #222;
+      padding: 10px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>실수의 대소 관계(상)</h1>
+
+  <!-- (1) 첫 화면: 이름 입력, 난이도 선택 -->
+  <div id="start-screen">
+    <h3>이름을 입력하세요.</h3>
+    <input type="text" id="player-name" placeholder="이름" style="width: 200px;" />
+    <h3>난이도를 선택하세요.</h3>
+    <select id="difficulty-select">
+      <option value="최상">최상 (20초, 문제당 20점)</option>
+      <option value="상">상 (30초, 문제당 15점)</option>
+      <option value="중">중 (40초, 문제당 13점)</option>
+      <option value="하">하 (무제한, 문제당 10점)</option>
+    </select>
+    <br /><br />
+    <button onclick="startGame()">게임 시작</button>
+  </div>
+
+  <!-- (2) 퀴즈 화면 -->
+  <div id="quiz-screen" class="hidden">
+    <!-- 전체 경과 시간 표시 -->
+    <div>전체 진행 시간: <span id="total-time">0</span>초</div>
+    <!-- 남은 기회 표시 -->
+    <div class="chance-info">남은 기회: <span id="chances">3</span></div>
+    <!-- 현재 점수 표시 -->
+    <div class="score-info">점수: <span id="score">0</span></div>
+
+    <!-- 에너지바(시간제한) -->
+    <div class="energy-bar" id="energy-bar">
+      <div class="energy-fill" id="energy-fill"></div>
+    </div>
+
+    <!-- 문제 내용 / 조건 / 문제 -->
+    <div id="condition-area"></div>
+    <div id="question-area"></div>
+    
+    <!-- 보기 -->
+    <div class="choices-container" id="choices-container"></div>
+  </div>
+
+  <!-- (3) 게임 종료 화면 -->
+  <div id="end-screen" class="hidden">
+    <h2>게임 종료</h2>
+    <div>최종 점수: <span id="final-score"></span></div>
+    <div>총 소요 시간: <span id="final-time"></span>초</div>
+    <!-- 점수 전송 버튼 -->
+    <button onclick="submitScore()">점수전송</button>
+    <div id="response"></div>
+  </div>
+</div>
+
+<script>
+/* 
+  서버에 점수 전송 함수
+  (문제에서 요구한 부분 그대로 삽입)
+*/
+function saveData(game, name, score, elapsedTime) {
+  const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+  const requestData = {
+    game,
+    name,
+    score: parseInt(score, 10),
+    elapsedTime: parseInt(elapsedTime, 10)
+  };
+
+  fetch(FUNCTION_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestData)
+  })
+    .then(response => {
+      return response.json().then(responseData => {
+        if (response.ok) {
+          document.getElementById('response').innerText =
+            "성공: " + JSON.stringify(responseData, null, 2);
+        } else {
+          document.getElementById('response').innerText =
+            "오류: " + JSON.stringify(responseData, null, 2);
+        }
+      });
+    })
+    .catch(error => {
+      console.error('요청 실패:', error);
+      document.getElementById('response').innerText =
+        "네트워크 오류: " + error.message;
+    });
+}
+
+/* (A) 문제 데이터
+   - 각 객체: { type:'four'|'two', condition:'...', question:'...', choices:[...], correct: number }
+   - 아래에 36문항 모두 포함 (문항번호는 생략)
+*/
+const allProblems = [
+  // 4지 선다형 (두 실수 사이 정수 개수)
+  {
+    type: 'four',
+    condition: "두 실수 \\(2 - \\sqrt{5}\\)와 \\(\\sqrt{17} - 3\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["1개","2개","3개","4개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(-2 - \\sqrt{7}\\)와 \\(1 + \\sqrt{5}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["6개","7개","8개","9개"],
+    correct: 2
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(-\\sqrt{2}\\)와 \\(2 + \\sqrt{7}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["5개","6개","7개","8개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(4 - \\sqrt{15}\\)와 \\(3 + \\sqrt{7}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["4개","5개","6개","7개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(-3 + \\sqrt{5}\\)와 \\(2 + \\sqrt{2}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["3개","4개","5개","6개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(\\sqrt{8} - 5\\)와 \\(\\sqrt{3} + 1\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["4개","5개","6개","7개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(-1 - \\sqrt{3}\\)와 \\(1 + \\sqrt{7}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["5개","6개","7개","8개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(-\\sqrt{12}\\)와 \\(2 + \\sqrt{3}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["6개","7개","8개","9개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(2 - \\sqrt{31}\\)와 \\(3 + \\sqrt{19}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["10개","11개","12개","13개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(7 - \\sqrt{13}\\)와 \\(\\sqrt{5} - 9\\)",
+    question: "이 사이에 있는 정수의 개수는? (\\(\\sqrt{5}-9\\)이 더 작음)",
+    choices: ["9개","10개","11개","12개"],
+    correct: 1
+  },
+  {
+    type: 'four',
+    condition: "두 실수 \\(\\sqrt{3} - 3\\)와 \\(3 + \\sqrt{3}\\)",
+    question: "이 사이에 있는 정수의 개수는?",
+    choices: ["5개","6개","7개","8개"],
+    correct: 1
+  },
+
+  // 2지 선다형 (두 수 대소 비교)
+  {
+    type: 'two',
+    condition: "\\(3\\)와 \\(\\sqrt{10}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(3 < \\sqrt{10}\\)", "\\(3 > \\sqrt{10}\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(4\\)와 \\(\\sqrt{15}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(4 < \\sqrt{15}\\)", "\\(4 > \\sqrt{15}\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(-\\sqrt{35}\\)와 \\(-6\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(-\\sqrt{35} < -6\\)", "\\(-\\sqrt{35} > -6\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{0.2}\\)와 \\(0.2\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{0.2} < 0.2\\)", "\\(\\sqrt{0.2} > 0.2\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(-\\sqrt{\\dfrac{6}{7}}\\)과 \\(-1\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(-\\sqrt{\\dfrac{6}{7}} < -1\\)", "\\(-\\sqrt{\\dfrac{6}{7}} > -1\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{5}-3\\)와 \\(\\sqrt{5}-2\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{5}-3 < \\sqrt{5}-2\\)", "\\(\\sqrt{5}-3 > \\sqrt{5}-2\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(4 - \\sqrt{6}\\)와 \\(4 - \\sqrt{7}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(4 - \\sqrt{6} < 4 - \\sqrt{7}\\)", "\\(4 - \\sqrt{6} > 4 - \\sqrt{7}\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(1 + \\sqrt{7}\\)와 \\(4\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(1 + \\sqrt{7} < 4\\)", "\\(1 + \\sqrt{7} > 4\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{12} - 2\\)와 \\(1\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{12} - 2 < 1\\)", "\\(\\sqrt{12} - 2 > 1\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{20} - 3\\)와 \\(2\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{20} - 3 < 2\\)", "\\(\\sqrt{20} - 3 > 2\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(1\\)와 \\(4 - \\sqrt{8}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(1 < 4 - \\sqrt{8}\\)", "\\(1 > 4 - \\sqrt{8}\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(5 - \\sqrt{3}\\)와 \\(4\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(5 - \\sqrt{3} < 4\\)", "\\(5 - \\sqrt{3} > 4\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(4\\)와 \\(6 - \\sqrt{2}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(4 < 6 - \\sqrt{2}\\)", "\\(4 > 6 - \\sqrt{2}\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(4 + \\sqrt{11}\\)와 \\(7\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(4 + \\sqrt{11} < 7\\)", "\\(4 + \\sqrt{11} > 7\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{3} + \\sqrt{2}\\)와 \\(2\\sqrt{2}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{3} + \\sqrt{2} < 2\\sqrt{2}\\)", "\\(\\sqrt{3} + \\sqrt{2} > 2\\sqrt{2}\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(3 + \\sqrt{5}\\)와 \\(3 + \\sqrt{6}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(3 + \\sqrt{5} < 3 + \\sqrt{6}\\)", "\\(3 + \\sqrt{5} > 3 + \\sqrt{6}\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{5} - 2\\)와 \\(\\sqrt{5} - 3\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{5} - 2 < \\sqrt{5} - 3\\)", "\\(\\sqrt{5} - 2 > \\sqrt{5} - 3\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(8 - \\sqrt{6}\\)와 \\(9 - \\sqrt{6}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(8 - \\sqrt{6} < 9 - \\sqrt{6}\\)", "\\(8 - \\sqrt{6} > 9 - \\sqrt{6}\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{10} - 3\\)와 \\(\\sqrt{7} - 3\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{10} - 3 < \\sqrt{7} - 3\\)", "\\(\\sqrt{10} - 3 > \\sqrt{7} - 3\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(6 - \\sqrt{3}\\)와 \\(6 - \\sqrt{5}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(6 - \\sqrt{3} < 6 - \\sqrt{5}\\)", "\\(6 - \\sqrt{3} > 6 - \\sqrt{5}\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{3} + \\sqrt{2}\\)와 \\(\\sqrt{3} + 1\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{3} + \\sqrt{2} < \\sqrt{3} + 1\\)", "\\(\\sqrt{3} + \\sqrt{2} > \\sqrt{3} + 1\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(2 + \\sqrt{5}\\)와 \\(\\sqrt{5} + 3\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(2 + \\sqrt{5} < \\sqrt{5} + 3\\)", "\\(2 + \\sqrt{5} > \\sqrt{5} + 3\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(3 + \\sqrt{5}\\)와 \\(\\sqrt{10} + \\sqrt{5}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(3 + \\sqrt{5} < \\sqrt{10} + \\sqrt{5}\\)", "\\(3 + \\sqrt{5} > \\sqrt{10} + \\sqrt{5}\\)"],
+    correct: 0
+  },
+  {
+    type: 'two',
+    condition: "\\(\\sqrt{6} + \\sqrt{8}\\)와 \\(2 + \\sqrt{6}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(\\sqrt{6} + \\sqrt{8} < 2 + \\sqrt{6}\\)", "\\(\\sqrt{6} + \\sqrt{8} > 2 + \\sqrt{6}\\)"],
+    correct: 1
+  },
+  {
+    type: 'two',
+    condition: "\\(4 + \\sqrt{11}\\)와 \\(\\sqrt{15} + \\sqrt{11}\\)",
+    question: "어느 쪽이 더 큰가?",
+    choices: ["\\(4 + \\sqrt{11} < \\sqrt{15} + \\sqrt{11}\\)", "\\(4 + \\sqrt{11} > \\sqrt{15} + \\sqrt{11}\\)"],
+    correct: 1
+  }
+];
+
+/* (B) 전역 변수들 */
+let playerName = "";
+let difficulty = "하";
+let timeLimit = 0; // 문제당 제한 시간(초); 하=무제한이면 0으로 처리
+let scorePerQuestion = 10;
+let currentScore = 0;
+let remainingChances = 3;
+let currentIndex = 0;      // 현재 문제 인덱스
+let totalElapsed = 0;      // 전체 경과 시간(초)
+let totalTimer = null;     // 전체 타이머
+let questionTimer = null;  // 문제 타이머
+let energyDecrement = null;// 에너지바용 interval
+let questionTimeLeft = 0;  // 현재 문제 남은 시간
+let questionSet = [];      // 현재 출제용 문제 배열 (최초엔 allProblems 무작위 셔플)
+let usedAllOnce = false;   // 모든 문제를 한 바퀴 소진했는지 여부
+
+/* (C) 유틸: 배열 셔플 */
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+/* (D) 게임 시작 */
+function startGame() {
+  playerName = document.getElementById('player-name').value.trim();
+  if(!playerName){
+    alert("이름을 입력하세요.");
+    return;
+  }
+
+  difficulty = document.getElementById('difficulty-select').value;
+  switch(difficulty){
+    case "최상":
+      timeLimit = 20;
+      scorePerQuestion = 20;
+      break;
+    case "상":
+      timeLimit = 30;
+      scorePerQuestion = 15;
+      break;
+    case "중":
+      timeLimit = 40;
+      scorePerQuestion = 13;
+      break;
+    case "하":
+      timeLimit = 0; // 무제한
+      scorePerQuestion = 10;
+      break;
+  }
+
+  // 초기화
+  currentScore = 0;
+  remainingChances = 3;
+  totalElapsed = 0;
+  currentIndex = 0;
+  usedAllOnce = false;
+
+  // 문제 셔플 후 시작
+  questionSet = [...allProblems];
+  shuffleArray(questionSet);
+
+  // 화면 전환
+  document.getElementById('start-screen').classList.add('hidden');
+  document.getElementById('quiz-screen').classList.remove('hidden');
+  document.getElementById('end-screen').classList.add('hidden');
+
+  document.getElementById('score').textContent = currentScore;
+  document.getElementById('chances').textContent = remainingChances;
+
+  // 전체 진행 시간 타이머 시작
+  totalTimer = setInterval(()=>{
+    totalElapsed++;
+    document.getElementById('total-time').textContent = totalElapsed;
+  },1000);
+
+  // 문제 로드
+  loadQuestion();
+}
+
+/* (E) 문제 로드 */
+function loadQuestion() {
+  // 시간 다 써서 혹은 오답 3회로 게임종료된 경우 막기
+  if(remainingChances <= 0) {
+    endGame();
+    return;
+  }
+
+  // 만약 문제를 전부 한 바퀴 풀었으면, 이제부터는 무한 랜덤
+  if(currentIndex >= questionSet.length){
+    usedAllOnce = true;
+    // 무한 랜덤
+    currentIndex = Math.floor(Math.random() * questionSet.length);
+  }
+
+  let problem = questionSet[currentIndex];
+  
+  // 표시
+  document.getElementById('condition-area').textContent = "조건: " + problem.condition;
+  document.getElementById('question-area').textContent = "문제: " + problem.question;
+
+  // 보기 생성 전 비우기
+  let cc = document.getElementById('choices-container');
+  cc.innerHTML = "";
+
+  // 보기를 복사해서 무작위 섞기 (단, 2지선다면 크게 필요 없긴 함)
+  let choiceIndices = problem.choices.map((_,i)=>i);
+  shuffleArray(choiceIndices);
+
+  choiceIndices.forEach((idx)=>{
+    let btn = document.createElement('button');
+    btn.className = "choice-button";
+    btn.innerHTML = problem.choices[idx]; 
+    btn.onclick = ()=>checkAnswer(idx);
+    cc.appendChild(btn);
+  });
+
+  // MathJax 렌더링
+  MathJax.typeset();
+
+  // 문제 타이머 세팅
+  if(timeLimit > 0){
+    questionTimeLeft = timeLimit;
+    document.getElementById('energy-bar').style.display = "block";
+
+    // 에너지바 초기화
+    let energyFill = document.getElementById('energy-fill');
+    energyFill.style.width = "100%";
+
+    if(questionTimer) clearInterval(questionTimer);
+    if(energyDecrement) clearInterval(energyDecrement);
+
+    // 초당 1씩 줄어든다
+    energyDecrement = setInterval(()=>{
+      questionTimeLeft--;
+      let pct = (questionTimeLeft/timeLimit)*100;
+      if(pct<0) pct=0;
+      energyFill.style.width = pct+"%";
+      if(questionTimeLeft<=0){
+        // 시간 소진 -> 오답 처리와 동일하게 기회 1 감소 후 다음 문제로
+        clearInterval(energyDecrement);
+        clearInterval(questionTimer);
+        remainingChances--;
+        document.getElementById('chances').textContent = remainingChances;
+        if(remainingChances<=0){
+          endGame();
+        } else {
+          // 새로운 문제
+          currentIndex++;
+          loadQuestion();
+        }
+      }
+    },1000);
+  } else {
+    // 하(무제한)인 경우 에너지바 안 보임
+    document.getElementById('energy-bar').style.display = "none";
+  }
+}
+
+/* (F) 정답 체크 */
+function checkAnswer(chosenIndex) {
+  let problem = questionSet[currentIndex];
+
+  // 보기를 찾기 위해 다시 섞인 순서를 알 필요가 있지만,
+  // 여기서는 단순 구현을 위해 '현재 표시된 text'와 '정답 text'를 직접 비교하거나
+  // 혹은 위에서 choiceIndices를 전역에 저장하는 방식 등을 사용해도 됨.
+  // 여기서는 간단히: 표시된 text와 실제 correct text를 비교하는 방법을 쓰기 위해
+  // choice-button 클릭 시점을 기준으로 DOM에서 비교 가능하지만 
+  // 더 깔끔히는 "idx == problem.correct" 와 "idx == chosenIndex"가 같은지 여부를 보면 됨.
+  
+  // 문제에서 shuffleArray()로 보기 순서가 섞였으므로,
+  // 우리가 버튼을 생성할 때 onclick에 checkAnswer(idx)로 걸었으니,
+  // 그 idx는 problem.choices에서의 원본 인덱스이므로 직접 비교 가능.
+
+  if(chosenIndex === problem.correct){
+    // 정답
+    currentScore += scorePerQuestion;
+    document.getElementById('score').textContent = currentScore;
+  } else {
+    // 오답
+    remainingChances--;
+    document.getElementById('chances').textContent = remainingChances;
+    // 정답 알려주기
+    alert("틀렸습니다! 정답: "+ problem.choices[problem.correct]);
+  }
+
+  if(remainingChances<=0){
+    endGame();
+    return;
+  }
+
+  // 다음 문제로
+  currentIndex++;
+  if(energyDecrement) clearInterval(energyDecrement);
+  loadQuestion();
+}
+
+/* (G) 게임 종료 */
+function endGame(){
+  // 타이머 해제
+  if(totalTimer) clearInterval(totalTimer);
+  if(questionTimer) clearInterval(questionTimer);
+  if(energyDecrement) clearInterval(energyDecrement);
+
+  document.getElementById('quiz-screen').classList.add('hidden');
+  document.getElementById('end-screen').classList.remove('hidden');
+
+  document.getElementById('final-score').textContent = currentScore;
+  document.getElementById('final-time').textContent = totalElapsed;
+}
+
+/* (H) 점수 전송 */
+function submitScore(){
+  // 예: saveData("실수의 대소 관계(상)", playerName, currentScore, totalElapsed);
+  saveData("실수의 대소 관계(상)", playerName, currentScore, totalElapsed);
+}
+</script>
+</body>
+</html>
